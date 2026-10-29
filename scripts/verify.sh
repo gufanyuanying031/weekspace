@@ -3,7 +3,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 mkdir -p build/verification
-bash scripts/build.sh > build/verification/build.log 2>&1
+if ! bash scripts/build.sh > build/verification/build.log 2>&1; then
+  cat build/verification/build.log
+  exit 1
+fi
 python3 Tests/make_fixtures.py
 rm -f build/verification/mock-port.txt
 python3 Tests/mock_api.py > build/verification/mock-api.log 2>&1 &
@@ -17,5 +20,8 @@ swiftc -parse-as-library -swift-version 5 -target "$(uname -m)-apple-macos14.0" 
   -framework SwiftUI -framework AppKit \
   Sources/Weekspace/Model.swift Sources/Weekspace/Importer.swift Sources/Weekspace/Store.swift \
   Tests/IntegrationTests.swift -o build/verification/IntegrationTests
-build/verification/IntegrationTests "$(cat build/verification/mock-port.txt)" "$REPO_ROOT/build/verification/fixtures" > build/verification/integration.log 2>&1
+if ! build/verification/IntegrationTests "$(cat build/verification/mock-port.txt)" "$REPO_ROOT/build/verification/fixtures" > build/verification/integration.log 2>&1; then
+  cat build/verification/integration.log
+  exit 1
+fi
 cat build/verification/build.log build/verification/integration.log
