@@ -61,6 +61,12 @@ import Foundation
             try check(parsed.first{$0.rule.title == "学习分享" && $0.rule.weekdays == [7]}?.rule.weeks == [4],"exceptional Saturday teaching week")
             try check(workshops.allSatisfy{$0.rule.time == "09:00–10:40"},"consecutive periods retain full time range")
         }
+        let rolling = PlanStore(directoryOverride:root.appendingPathComponent("rolling"))
+        rolling.db.lastOpenedDay = "2026-10-29";rolling.followCurrentWeek = true
+        rolling.selectedWeek = Dates.date("2026-10-29")
+        rolling.db.courses = [CourseRule(title:"Thursday",weekdays:[5],start:"2026-10-26",end:"2026-12-31",anchor:"2026-10-26")]
+        rolling.rollover(now:Dates.date("2026-10-30"))
+        try check(rolling.db.tasks.contains{$0.day == "2026-11-05"},"rollover materializes newly visible seventh day")
         let port = CommandLine.arguments[1]
         restored.db.ai.baseURL = "http://127.0.0.1:\(port)/v1"
         restored.db.ai.model = "test-success"

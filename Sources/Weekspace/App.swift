@@ -110,7 +110,7 @@ extension Notification.Name {
     @objc func quit() { store.save(); NSApp.terminate(nil) }
     @objc func woke() { store.rollover(); Task {await store.refreshQuote()} }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "周间 · Weekspace", .applicationVersion: "0.2.0", .credits: NSAttributedString(string: "给重要的事，留点时间。\n本地周计划 · 固定课表 · 每日归档")])
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "周间 · Weekspace", .applicationVersion: "0.2.1", .credits: NSAttributedString(string: "给重要的事，留点时间。\n本地周计划 · 固定课表 · 每日归档")])
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { sender.orderOut(nil); return false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { show(); return true }

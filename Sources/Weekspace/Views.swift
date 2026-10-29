@@ -435,7 +435,7 @@ struct SettingsView: View {
                 Button("导出备份") { store.exportJSON() }.buttonStyle(QuietButton())
             }
             HStack {
-                Text("周间 · v0.2.0").font(.system(size: 10)).foregroundStyle(muted)
+                Text("周间 · v0.2.1").font(.system(size: 10)).foregroundStyle(muted)
                 Spacer(); Button("取消") { dismiss() }.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction)
                 Button("保存设置") {
                     do { try KeyStore.write(key); store.db.ai.baseURL = base; store.db.ai.model = model; store.save(); dismiss() }

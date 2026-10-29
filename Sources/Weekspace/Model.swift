@@ -50,6 +50,15 @@ struct CourseRule: Codable, Identifiable, Equatable {
     var cadence = 0
     var anchor = Dates.key(Dates.week(Date()))
     var weeks: [Int]? = nil
+    var recurrenceLabel:String {
+        if let weeks {return "第 " + weeks.map {String($0)}.joined(separator:",") + " 周"}
+        return ["每周","单周","双周"][cadence]
+    }
+    var dateRangeLabel:String {"\(start) — \(end) · \(recurrenceLabel)"}
+    var scheduleLabel:String {
+        let names = weekdays.map {CourseImporter.weekdayName($0)}.joined(separator:"、")
+        return "\(names) · \(slot.title) \(time)"
+    }
     func matches(_ day: Date) -> Bool {
         let key = Dates.key(day)
         guard key >= start, key <= end, weekdays.contains(Dates.calendar.component(.weekday, from: day)) else { return false }

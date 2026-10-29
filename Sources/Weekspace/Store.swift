@@ -85,10 +85,11 @@ enum KeyStore {
             message = "已保存 · \(Dates.label(Date(), "HH:mm"))"
         } catch { self.error = "保存失败：\(error.localizedDescription)"; message = "保存失败" }
     }
-    func rollover() {
-        guard db.lastOpenedDay != Dates.key(Date()) else { return }
-        let before = db.lastOpenedDay; db.rollover()
-        if followCurrentWeek { selectedWeek = Dates.calendar.startOfDay(for: Date()) }
+    func rollover(now:Date = Date()) {
+        guard db.lastOpenedDay != Dates.key(now) else { return }
+        let before = db.lastOpenedDay; db.rollover(now:now)
+        if followCurrentWeek { selectedWeek = Dates.calendar.startOfDay(for:now) }
+        db.materialize(selectedWeek,now:now)
         if before != db.lastOpenedDay { save() }
     }
     func navigate(_ offset: Int) {

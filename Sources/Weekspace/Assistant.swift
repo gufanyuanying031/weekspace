@@ -153,8 +153,8 @@ struct CourseImportView:View {
                             Toggle("",isOn:Binding(get:{chosen.contains(item.id)},set:{if $0 {chosen.insert(item.id)} else {chosen.remove(item.id)}})).labelsHidden().toggleStyle(.checkbox).disabled(imported)
                             VStack(alignment:.leading,spacing:5) {
                                 Text(item.rule.title).font(.system(size:13,weight:.medium))
-                                Text(item.rule.weekdays.map{["","日","一","二","三","四","五","六"][$0]}.map{"周"+$0}.joined(separator:"、") + " · " + item.rule.slot.title + " " + item.rule.time).font(.system(size:11)).foregroundStyle(muted)
-                                Text(item.rule.start+" — "+item.rule.end+" · "+(item.rule.weeks.map{"第 "+$0.map(String.init).joined(separator:",")+" 周"} ?? ["每周","单周","双周"][item.rule.cadence])).font(.system(size:10)).foregroundStyle(muted)
+                                Text(item.rule.scheduleLabel).font(.system(size:11)).foregroundStyle(muted)
+                                Text(item.rule.dateRangeLabel).font(.system(size:10)).foregroundStyle(muted)
                                 if !item.warning.isEmpty {Text(item.warning).font(.system(size:10)).foregroundStyle(Color.orange.opacity(0.9))}
                                 if duplicate(item.rule) {Text("已有相同课程，导入时将跳过重复项。").font(.system(size:10)).foregroundStyle(muted)}
                             }
