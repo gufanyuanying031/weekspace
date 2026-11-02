@@ -228,6 +228,27 @@ struct TaskCell: View {
         if keepOpen {focused = true}
     }
 }
+/// Keep the entire control clickable, including the whitespace around the dots.
+struct TaskDetailsButton: View {
+    var action: () -> Void
+    @ViewState<Bool> private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(hovering ? ink : muted)
+                .frame(width: 28, height: 28)
+                .background(hovering ? Color.black.opacity(0.065) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("编辑任务：时间、日期与备注")
+        .accessibilityLabel("编辑任务详情")
+    }
+}
+
 struct InlineTaskRow:View {
     @ObservedObject var store:PlanStore;var task:PlanTask;var onDetails:()->Void
     @ViewState<Bool> private var editing = false
@@ -246,7 +267,7 @@ struct InlineTaskRow:View {
                 if task.courseID != nil {Text("固定课程").font(.system(size:8)).foregroundStyle(muted)}
                 if !task.note.isEmpty {Text(task.note).font(.system(size:9)).foregroundStyle(muted).lineLimit(2)}
             }.frame(maxWidth:.infinity,alignment:.leading)
-            Button(action:onDetails){Image(systemName:"ellipsis").font(.system(size:10)).foregroundStyle(muted.opacity(0.6))}.buttonStyle(.plain).help("时间、日期与备注")
+            TaskDetailsButton(action:onDetails)
         }.padding(8).background(task.courseID != nil ? Color.black.opacity(0.035):Color.white.opacity(0.6)).clipShape(RoundedRectangle(cornerRadius:7))
             .onChange(of:focused){_,value in if !value && editing {commit()} }
             .onDrag {NSItemProvider(object:("task:"+task.id.uuidString) as NSString)}
