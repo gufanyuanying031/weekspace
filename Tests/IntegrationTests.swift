@@ -73,6 +73,45 @@ import Foundation
         await restored.generate(prompt:"仅用于本机接口验证的虚构记录", week:restored.selectedWeek, apiKey:"")
         try check(restored.error == nil && restored.summary(restored.selectedWeek).contains("本地模拟复盘"), "compatible API success parsed")
         try check(restored.summary(restored.selectedWeek).hasPrefix("人工复盘"), "AI preserves manual summary")
+        // Entire meeting pipeline uses synthetic records and the localhost mock only.
+        let meeting = "虚构会议：小林下周五提交原型，附交互说明。小周整理测试数据。还需要确认部署环境，负责人未定。"
+        let meetingPrompt = try MeetingTasks.prompt(record:meeting)
+        try check(!meetingPrompt.contains("持久化测试") && !meetingPrompt.contains(template.title), "meeting prompt excludes planner and task pool")
+        restored.db.ai.model = "test-meeting"
+        let poolBeforeAnalysis = restored.db.pool.count, tasksBeforeAnalysis = restored.db.tasks.count
+        let response = try await restored.requestAI(prompt:meetingPrompt,apiKey:"")
+        let extracted = try MeetingTasks.parse(response,record:meeting)
+        try check(extracted.count == 3 && extracted[0].assignee == "小林" && extracted[1].assignee == "小周", "meeting API response groups tasks by explicit assignees")
+        try check(extracted[0].deadline == "下周五" && extracted[2].assignee.isEmpty, "relative deadline and unknown assignee preserved without inference")
+        try check(restored.db.pool.count == poolBeforeAnalysis && restored.db.tasks.count == tasksBeforeAnalysis, "analysis never writes tasks or templates")
+        var edited = extracted[0];edited.title = "提交可演示原型";edited.assignee = "小林（设计）"
+        let accepted = restored.acceptMeetingTasks([edited])
+        try check(accepted == [edited.id] && restored.db.pool.count == poolBeforeAnalysis + 1 && !restored.db.pool.contains{$0.id == extracted[1].id}, "only explicitly selected edited meeting task imported")
+        let imported = restored.db.pool.first{$0.id == edited.id}!
+        try check(imported.title == "提交可演示原型" && imported.note.contains("小林（设计）") && imported.note.contains("下周五") && imported.note.contains(edited.evidence), "pool retains assignee deadline and meeting evidence")
+        restored.acceptMeetingTasks([edited]);var reanalyzed = edited;reanalyzed.id = UUID();restored.acceptMeetingTasks([reanalyzed])
+        try check(restored.db.pool.count == poolBeforeAnalysis + 1, "repeated import and identical reanalysis skip duplicate templates")
+        restored.acceptMeetingTasks([extracted[1]])
+        try check(restored.db.pool.count == poolBeforeAnalysis + 2, "remaining meeting tasks can be imported in a later batch")
+        restored.placePool(imported.id,day:Date(),slot:.morning);restored.placePool(imported.id,day:Date(),slot:.evening)
+        let meetingCopies = restored.db.tasks.filter{$0.title == imported.title}
+        try check(meetingCopies.count == 2 && Set(meetingCopies.map(\.id)).count == 2 && meetingCopies.allSatisfy{$0.note == imported.note} && restored.db.pool.contains{$0.id == imported.id}, "meeting template supports repeated placement with independent tasks and metadata")
+        let meetingRestart = PlanStore(directoryOverride:root)
+        try check(meetingRestart.db.pool.contains(imported), "selected meeting template survives restart")
+        try check(try MeetingTasks.parse("[]",record:meeting).isEmpty, "meeting with no actions accepts empty response")
+        let repeatedRows = "[" + String(response.dropFirst().dropLast()) + "," + String(response.dropFirst().dropLast()) + "]"
+        try check(try MeetingTasks.parse(repeatedRows,record:meeting).count == 3, "duplicate extracted actions merged")
+        func rejects(_ action: () throws -> Void) -> Bool { do {try action();return false} catch {return true} }
+        let invented = response.replacingOccurrences(of:"小周整理测试数据。",with:"原文没有的证据")
+        try check(rejects { _ = try MeetingTasks.parse(invented,record:meeting) }, "invented source evidence rejected before import")
+        try check(rejects { _ = try MeetingTasks.parse("[{\"title\":\"未核对\"}]",record:meeting) }, "malformed meeting schema rejected")
+        try check(rejects { _ = try MeetingTasks.prompt(record:"   ") } && rejects { _ = try MeetingTasks.prompt(record:String(repeating:"字",count:60_001)) }, "empty and oversized meetings blocked before request")
+        let protectedStore = PlanStore(directoryOverride:root.appendingPathComponent("protected"));protectedStore.canWrite = false
+        try check(protectedStore.acceptMeetingTasks([edited]).isEmpty && protectedStore.db.pool.isEmpty, "read protected store rejects meeting import")
+        let failedStore = PlanStore(directoryOverride:root.appendingPathComponent("write-failure"))
+        try FileManager.default.removeItem(at:failedStore.directory)
+        try Data("blocked".utf8).write(to:failedStore.directory)
+        try check(failedStore.acceptMeetingTasks([edited]).isEmpty && failedStore.db.pool.isEmpty && failedStore.error != nil, "failed meeting save rolls back templates and reports error")
         restored.db.ai.model = "test-error"; restored.error = nil
         let before = restored.summary(restored.selectedWeek)
         await restored.generate(prompt:"test",week:restored.selectedWeek,apiKey:"")

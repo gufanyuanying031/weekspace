@@ -3,13 +3,13 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum AssistMode:String,CaseIterable,Identifiable {
-    case notes,review,report,plan,breakdown,balance
+    case notes,review,report,plan,breakdown,balance,meeting
     var id:String {rawValue}
-    var title:String {switch self {case .notes:return "手写记录";case .review:return "七日复盘";case .report:return "工作汇报";case .plan:return "排程建议";case .breakdown:return "拆解目标";case .balance:return "负荷分析"}}
+    var title:String {switch self {case .meeting:return "会议任务";case .notes:return "手写记录";case .review:return "七日复盘";case .report:return "工作汇报";case .plan:return "排程建议";case .breakdown:return "拆解目标";case .balance:return "负荷分析"}}
     var structured:Bool {self == .plan || self == .breakdown}
     var instruction:String {
         switch self {
-        case .notes:return ""
+        case .notes,.meeting:return ""
         case .review:return "整理这七天完成的事、未完成的事、明确记录的卡点和后续建议。课程与自主任务分开；不把过期当完成。不推测没有记录的原因。"
         case .report:return "写一份可用于向老师或团队汇报的简短工作记录。分为完成工作、当前问题、下一步；仅引用记录中支持的事实，提议标为建议，不夸大成果。"
         case .plan:return "根据任务池、现有安排和用户目标，建议在这七天中安排少量任务，避开密集课程。只新增建议，不复制已完成任务，不声称已经安排。输出 JSON 数组，每项仅含 title,day(yyyy-MM-dd),slot(0上午1下午2晚上),note。日期严格在给定七日区间。不要输出其他文字。"
@@ -50,6 +50,9 @@ struct AssistantView:View {
             HStack {
                 Picker("功能",selection:$mode){ForEach(AssistMode.allCases){Text($0.title).tag($0)}}.pickerStyle(.segmented).disabled(store.isGenerating)
             }
+            if mode == .meeting {
+                MeetingTasksView(store:store)
+            } else {
             Text("\(Dates.label(start,"M月d日")) — \(Dates.label(Dates.add(6,to:start),"M月d日")) · \(store.db.ai.model.isEmpty ? "请先在设置中配置模型":store.db.ai.model)").font(.system(size:11)).foregroundStyle(muted)
             if mode != .notes {
             TextField(mode == .breakdown ? "想完成什么？例如：准备下周的论文汇报":"偏好或重点（可选），例如：晚上留白，优先处理研究任务",text:$goal).textFieldStyle(.roundedBorder)
@@ -95,6 +98,7 @@ struct AssistantView:View {
                 }
                 }
                 Spacer();Button("关闭"){dismiss()}.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction)
+            }
             }
         }.padding(28).frame(width:790).background(Color.white)
             .onAppear {start = store.selectedWeek}
@@ -239,5 +243,191 @@ struct CourseCandidateEditor:View {
             Picker("重复",selection:$draft.cadence){Text("每周").tag(0);Text("单周").tag(1);Text("双周").tag(2)}
             HStack{Spacer();Button("取消"){dismiss()}.buttonStyle(QuietButton());Button("保留修正"){save(draft);dismiss()}.buttonStyle(QuietButton(filled:true)).disabled(draft.title.isEmpty || draft.weekdays.isEmpty || draft.end < draft.start || !ClockTime.validRange(draft.time))}
         }.padding(28).frame(width:550).onAppear{draft = rule}
+    }
+}
+
+private enum MeetingOwnerFilter: Hashable {
+    case all, unassigned, person(String)
+}
+
+struct MeetingTasksView: View {
+    @ObservedObject var store: PlanStore
+    @Environment(\.dismiss) var dismiss
+    @ViewState<String> private var record = ""
+    @ViewState<String> private var analyzedRecord = ""
+    @ViewState<[MeetingTaskDraft]> private var drafts = []
+    @ViewState<Set<UUID>> private var chosen = []
+    @ViewState<Set<UUID>> private var imported = []
+    @ViewState<MeetingOwnerFilter> private var owner = .all
+    @ViewState<[UUID:String]> private var originalOwners = [:]
+    @ViewState<Bool> private var analyzed = false
+    @ViewState<String> private var error = ""
+    @ViewState<String> private var status = ""
+
+    private var owners: [String] { Array(Set(originalOwners.values.filter { !$0.isEmpty })).sorted() }
+    private var visible: [MeetingTaskDraft] {
+        drafts.filter { task in
+            switch owner {
+            case .all: return true
+            case .unassigned: return originalOwners[task.id, default: ""].isEmpty
+            case .person(let name): return originalOwners[task.id] == name
+            }
+        }
+    }
+    private var selected: [MeetingTaskDraft] {
+        visible.filter { chosen.contains($0.id) && !imported.contains($0.id) && !$0.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && $0.title.count <= 200 }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            inputSection
+            previewSection
+            if !error.isEmpty { Text(error).font(.system(size:11)).foregroundStyle(.red).textSelection(.enabled) }
+            resultsSection
+            controls
+        }
+    }
+    private var inputSection: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("粘贴会议记录，提取各人的后续待办。").font(.system(size:12))
+                Spacer()
+                Button("导入文本…", action: chooseFile).buttonStyle(QuietButton()).disabled(store.isGenerating)
+            }
+            ZStack(alignment: .topLeading) {
+                if record.isEmpty {
+                    Text("例如：小林下周五提交方案；小周负责整理测试数据。\n支持会议纪要、录音转写或讨论记录。").font(.system(size:12)).foregroundStyle(muted).padding(10).allowsHitTesting(false)
+                }
+                TextEditor(text: $record).font(.system(size:12)).scrollContentBackground(.hidden).padding(5)
+                    .accessibilityLabel("会议记录原文").disabled(store.isGenerating)
+            }.frame(height:115).background(paper).clipShape(RoundedRectangle(cornerRadius:8))
+            Text("原文与未加入的草稿仅在本次页面保留。只发送这里的会议记录，不附带日程或任务池。").font(.system(size:10)).foregroundStyle(muted)
+        }
+    }
+    private var previewSection: some View {
+        DisclosureGroup("查看发送内容 · " + store.db.ai.model) {
+            Text("发送到：" + store.db.ai.baseURL).font(.system(size:10)).foregroundStyle(muted)
+            ScrollView {
+                Text((try? MeetingTasks.prompt(record:record)) ?? "请先填写会议记录（最多6万字）。")
+                    .font(.system(size:10)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)
+            }.frame(height:80)
+        }.font(.system(size:11))
+    }
+    private var resultsSection: some View {
+        VStack(alignment:.leading,spacing:8) {
+            HStack {
+                Picker("原负责人",selection:$owner) {
+                    Text("全部人员").tag(MeetingOwnerFilter.all)
+                    ForEach(owners,id:\.self) { name in Text(name).tag(MeetingOwnerFilter.person(name)) }
+                    Text("待确认负责人").tag(MeetingOwnerFilter.unassigned)
+                }.frame(maxWidth:260).disabled(store.isGenerating)
+                Spacer()
+                Text("\(visible.count) 项 · 已加入 \(drafts.filter { imported.contains($0.id) }.count) 项").font(.system(size:11)).foregroundStyle(muted)
+                Button("全选") { chosen.formUnion(visible.filter { !imported.contains($0.id) }.map(\.id)) }
+                    .disabled(visible.isEmpty || store.isGenerating)
+                Button("清空选择") { chosen.subtract(visible.map(\.id)) }.disabled(store.isGenerating)
+            }.font(.system(size:11))
+            if analyzed {Text("按分析时的负责人分组；内容可直接修改，默认不勾选。").font(.system(size:10)).foregroundStyle(muted)}
+            if analyzed && record != analyzedRecord {
+                Text("原文已修改，下面仍是上次分析的条目。重新分析可更新结果。").font(.system(size:10)).foregroundStyle(muted)
+            }
+            ScrollView {
+                LazyVStack(alignment:.leading,spacing:9) {
+                    ForEach($drafts) { $draft in
+                        if visible.contains(where: { $0.id == draft.id }) {
+                            MeetingDraftRow(draft:$draft,selected:Binding(get:{chosen.contains(draft.id)},set:{ value in
+                                if value {chosen.insert(draft.id)} else {chosen.remove(draft.id)}
+                            }),imported:imported.contains(draft.id))
+                            .disabled(store.isGenerating)
+                        }
+                    }
+                    if visible.isEmpty {
+                        Text(analyzed ? (drafts.isEmpty ? "没有提取到明确的后续待办。可补充记录后重新分析。" : "该负责人下暂无条目。") : "分析后按负责人查看条目，核对内容并勾选加入。")
+                            .font(.system(size:12)).foregroundStyle(muted).frame(maxWidth:.infinity,minHeight:150)
+                    }
+                }.padding(10)
+            }.frame(height:230).background(paper).clipShape(RoundedRectangle(cornerRadius:8))
+        }
+    }
+    private var controls: some View {
+        VStack(alignment:.leading,spacing:7) {
+            if !status.isEmpty { Text(status).font(.system(size:11)).foregroundStyle(green) }
+            HStack {
+                Button(store.isGenerating ? "正在分析…" : (analyzed ? "重新分析" : "分析会议记录"),action:analyze)
+                    .buttonStyle(QuietButton(filled:true))
+                    .disabled(store.isGenerating || record.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || record.count > MeetingTasks.maxRecordLength || store.db.ai.model.isEmpty)
+                Button("加入随心安排（\(selected.count)）",action:addSelected)
+                    .buttonStyle(QuietButton()).disabled(store.isGenerating || selected.isEmpty || !store.canWrite)
+                Spacer()
+                Button("关闭") {dismiss()}.buttonStyle(QuietButton()).keyboardShortcut(.cancelAction)
+            }
+            Text(record.count > MeetingTasks.maxRecordLength ? "内容超过6万字，请拆分后分析。" : "负责人和期限需人工核对；相对日期保留原文。加入后可反复拖放，不会自动排进日历。")
+                .font(.system(size:10)).foregroundStyle(muted)
+        }
+    }
+    private func analyze() {
+        guard !store.isGenerating else { return }
+        do {
+            let source = record
+            let prompt = try MeetingTasks.prompt(record:source)
+            store.isGenerating = true;error = "";status = ""
+            Task { @MainActor in
+                defer {store.isGenerating = false}
+                do {
+                    let response = try await store.requestAI(prompt:prompt)
+                    let parsed = try MeetingTasks.parse(response,record:source)
+                    drafts = parsed;chosen = [];imported = [];owner = .all;analyzedRecord = source;analyzed = true
+                    originalOwners = Dictionary(uniqueKeysWithValues:parsed.map { ($0.id,$0.assignee) })
+                } catch {self.error = error.localizedDescription}
+            }
+        } catch {self.error = error.localizedDescription}
+    }
+    private func addSelected() {
+        let before = store.db.pool.count
+        let ids = store.acceptMeetingTasks(selected)
+        imported.formUnion(ids);chosen.subtract(ids)
+        let added = store.db.pool.count - before
+        status = ids.isEmpty ? "未添加，请查看错误提示。" : "已加入 \(added) 项，相同条目跳过 \(ids.count - added) 项。可在随心安排中反复拖放。"
+        if let issue = store.error {error = issue}
+    }
+    private func chooseFile() {
+        let panel = NSOpenPanel();panel.allowsMultipleSelection = false;panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.plainText,UTType(filenameExtension:"md")].compactMap { $0 }
+        guard panel.runModal() == .OK,let url = panel.url else {return}
+        do {
+            let size = try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0
+            guard size <= 2_000_000 else {throw AppError.message("文件过大，请只保留本次会议的文本。")}
+            let text = try String(contentsOf:url,encoding:.utf8)
+            guard text.count <= MeetingTasks.maxRecordLength else {throw AppError.message("会议记录超过6万字，请拆分后导入。")}
+            record = text;error = ""
+        } catch {self.error = "无法导入：" + error.localizedDescription}
+    }
+}
+
+private struct MeetingDraftRow: View {
+    @Binding var draft: MeetingTaskDraft
+    @Binding var selected: Bool
+    var imported: Bool
+    var body: some View {
+        HStack(alignment:.top,spacing:9) {
+            Toggle("选择任务",isOn:$selected).labelsHidden().toggleStyle(.checkbox).disabled(imported)
+                .accessibilityLabel("选择：" + draft.title)
+            VStack(alignment:.leading,spacing:7) {
+                HStack {
+                    TextField("任务内容",text:$draft.title).textFieldStyle(.roundedBorder).accessibilityLabel("会议任务内容")
+                    if imported {Text("已加入").font(.system(size:10)).foregroundStyle(green)}
+                }
+                if draft.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || draft.title.count > 200 {
+                    Text("任务标题需为1至200字。").font(.system(size:10)).foregroundStyle(.red)
+                }
+                HStack {
+                    TextField("负责人待确认",text:$draft.assignee).accessibilityLabel("会议任务负责人")
+                    TextField("截止时间未提及",text:$draft.deadline).accessibilityLabel("会议任务截止时间")
+                }.textFieldStyle(.roundedBorder).font(.system(size:11))
+                TextField("补充说明（可选）",text:$draft.note,axis:.vertical).textFieldStyle(.roundedBorder).font(.system(size:11))
+                DisclosureGroup("原文依据") {
+                    Text(draft.evidence).font(.system(size:11)).foregroundStyle(muted).textSelection(.enabled)
+                }.font(.system(size:10))
+            }.disabled(imported)
+        }.padding(10).background(Color.white).clipShape(RoundedRectangle(cornerRadius:7))
     }
 }
